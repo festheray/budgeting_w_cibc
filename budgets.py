@@ -84,7 +84,9 @@ for new in emailid: #each new unread mail
         csv_category += [category]
 
     else: #didn't work?
-        vendor += '??????????'
+        csv_amount += '?????'
+        csv_vendor += '?????'
+        csv_category += '?????'
 
 # write values to csv                 
 with open('budgets.csv', 'a') as csvfile: 
