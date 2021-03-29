@@ -1,94 +1,106 @@
-import email, imaplib, os, re, csv
+import imaplib
+import email
+import os
+import re
+from datetime import datetime
+import openpyxl
+from openpyxl import Workbook, load_workbook
+# import vendor category mappings as category_dict
+from category_dict import category_dict
 
 detach_dir = "."
 
-#connect email via username & app token
-user = os.environ['BUDGETS_EMAIL']
-pwd = os.environ['BUDGETS_PASSWD']
-url = 'imap.gmail.com'
+# connect email via username & app token
+user = os.environ["BUDGETS_EMAIL"]
+pwd = os.environ["BUDGETS_PASSWD"]
+url = "imap.gmail.com"
 
 m = imaplib.IMAP4_SSL(url)
 m.login(user, pwd)
+m.select(mailbox="INBOX", readonly=True)
+# FOR TESTING: readonly=True
 
-#choosing mailbox
-m.select(mailbox='INBOX', readonly=False)
-##### FOR TESTING: readonly=True
+# grab emailids of all unread New Purchases mails
+result, emailid = m.search(None, "UnSeen", "ALL")
+emailid = emailid[0].split()  # getting emailids in a list
 
-result, emailid = m.search(None, 'UnSeen', 'ALL') #grab emailid's of all unread New Purchases mails
-emailid = emailid[0].split() # getting emailids in a list
+# Open workbook using openpyxl
+workbook_name = datetime.now().strftime("%Y") + "-budget_sheet.xlsx"
+try:
+    wb = load_workbook(filename=workbook_name)
+except:
+    wb = Workbook()
+# New worksheet for
+ws = wb.create_sheet(datetime.now().strftime("%b"))
+# Remove the annoying default named 'Sheet'
+try:
+    wb.remove(wb["Sheet"])
+except:
+    pass
 
-#create lists for csv columns
-csv_date = []
-csv_amount = [] 
-csv_vendor = [] 
-csv_category = []
-
-#import vendor category mappings as category_dict
-from category_dict import category_dict
+# Worksheet headings
+ws.append(["date", "amount", "vendor", "category"])
 
 ##########################
 ##### program starts #####
-########################## 
+##########################
 
-for new in emailid: #each new unread mail
-    resp, emailbody = m.fetch(new,'(RFC822)')
+for new in emailid:
     # OTHER OPTIONS: RFC822 (UID BODY[TEXT])
-    my_mail = email.message_from_string(emailbody[0][1].decode()) #decode emails into praseable format
+    resp, emailbody = m.fetch(new, '(RFC822)')
+    my_mail = email.message_from_string(emailbody[0][1].decode())
     emailbody = str(emailbody)
 
-    #date 
-    date = re.findall('Date: (.*?) \-', emailbody)
-    csv_date += date #add dates to csv
+    # date
+    date = re.search(
+        's*(Sun|Mon|Tue|Wed|Thu|Fri|Sat), \d{1,2} s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4}', emailbody)
+    date = date.group()
 
-    #transaction amount
-    amount = re.findall('\$\d{0,2}\,{0,1}\d{0,3}\.\d{0,2}', emailbody)
+    # transaction amount
+    amount = re.search('\$\d{0,2}\,{0,1}\d{0,3}\.\d{0,2}', emailbody)
+    amount = amount.group()
 
-    transaction_type = email.header.decode_header(my_mail['Subject']) #type of transaction from emailSubject
+    transaction_type = email.header.decode_header(
+        my_mail['Subject'])  # type of transaction from emailSubject
+    transaction_type = str(transaction_type[0])
 
     ##### func to categorize vendor by type #####
     def f_vendor_category():
-    #categorize vendor, if found in category_dict
-        for keys in category_dict: #search through keys in category_dict
-            if keys in vendor: #if key matches this vendor
-                global category
-                category = (category_dict[keys]) #category is the value of the dict
+        for keys in category_dict:
+            if keys in vendor:
+                global vendor_found
+                vendor_found = (category_dict[keys])
                 break
             else:
-                category = ' '
+                vendor_found = ' '
 
-    #new purchases
-    if 'New purchase on your credit card' in str(transaction_type[0]):
-        csv_amount += amount 
-        vendor = re.findall('at (.*?)\.\<br', str(emailbody))
-        csv_vendor += vendor
-        vendor = str(vendor) #change vendor into string format to search in category_dict
-        f_vendor_category() #categorize vendor using f_vendor_category
-        csv_category += [category]
+    # new purchases
+    if 'New purchase on your credit card' in transaction_type:
+        vendor = re.search('(?<=at )(.*?)(?=\.)', emailbody)
+        vendor = str(vendor.group())
+        f_vendor_category()
+        category = vendor_found
 
-    #recurring purchases 
-    elif 'New preauthorized payment with your credit card' in str(transaction_type[0]):
-        csv_amount += amount 
-        vendor = re.findall('to =\Sr\Sn(.*?) on your CIBC Dividend Visa', emailbody)
-        csv_vendor += vendor
-        vendor = str(vendor) #change vendor into string format to search in category_dict
-        f_vendor_category() #categorize vendor using f_vendor_category
-        csv_category += [category]
+    # # recurring purchases
+    elif 'New preauthorized payment with your credit card' in transaction_type:
+        vendor = re.search(
+            '(?<=to =\Sr\Sn)(.*?)(?= on your CIBC Dividend Visa)', emailbody)
+        vendor = str(vendor.group())
+        f_vendor_category()
+        category = vendor_found
 
-    #returns
-    elif 'New purchase return on your credit card' in str(transaction_type[0]):
-        csv_amount += ['-' + str(amount[0])]
-        vendor = re.findall('\$\d{0,2}\,{0,1}\d{0,3}\.\d{0,2} from (.*?) o', emailbody)
-        csv_vendor += vendor
-        vendor = str(vendor) #change vendor into string format to search in category_dict
-        f_vendor_category() #categorize vendor using f_vendor_category
-        csv_category += [category]
+    # returns
+    elif 'New purchase return on your credit card' in transaction_type:
+        vendor = re.search(
+            fr'(?<=\{amount} from )(.*?)(?=\=\\r)', emailbody)
+        vendor = str(vendor.group())
+        amount = '-{}'.format(amount)
+        f_vendor_category()
+        category = vendor_found
 
-    else: #didn't work?
-        csv_amount += '?????'
-        csv_vendor += '?????'
-        csv_category += '?????'
+    else:
+        vendor = ""
+        category = ""
 
-# write values to csv                 
-with open('budgets.csv', 'a') as csvfile: 
-    writer = csv.writer(csvfile)
-    writer.writerows(zip(csv_date, csv_amount, csv_vendor, csv_category))
+    ws.append([date, amount, vendor, category])
+wb.save(filename=workbook_name)
